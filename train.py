@@ -102,6 +102,8 @@ parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                     help='SGD momentum (default: 0.9)')
 parser.add_argument('--weight-decay', type=float, default=4e-5,
                     help='weight decay (default: 0.00004)')
+parser.add_argument('--grad_accumulation_steps', default=1, type=int,
+                    help='Number of gradient accumulation steps')
 
 # Learning rate schedule parameters
 parser.add_argument('--sched', default='cosine', type=str, metavar='SCHEDULER',
@@ -469,17 +471,18 @@ def train_epoch(
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
 
-        optimizer.zero_grad()
-        if use_amp:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-            if args.clip_grad:
-                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.clip_grad)
-        else:
-            loss.backward()
-            if args.clip_grad:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-        optimizer.step()
+        if (batch_idx + 1) % args.grad_accumulation_steps == 0:
+            optimizer.zero_grad()
+            if use_amp:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                if args.clip_grad:
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.clip_grad)
+            else:
+                loss.backward()
+                if args.clip_grad:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            optimizer.step()
 
         torch.cuda.synchronize()
         if model_ema is not None:
